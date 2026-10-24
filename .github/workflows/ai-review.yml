@@ -2,32 +2,45 @@ name: AI Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   review:
+    # PRs de fork não têm acesso ao secret GEMINI_API_KEY
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write # Necessário para comentar no PR
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENAI_API_ENDPOINT: https://generativelanguage.googleapis.com/v1beta/openai/
+      LANGUAGE: Portuguese
+      MAX_PATCH_LENGTH: 10000
+      IGNORE_PATTERNS: "*.md,*.lock,target/**"
+      PROMPT: |
+        Aja como um Engenheiro de Segurança Sênior (DevSecOps).
+        Analise o DIFF deste Pull Request buscando:
+        1. Vulnerabilidades OWASP Top 10 (especialmente SQL Injection e Insecure Deserialization).
+        2. Code Smells e complexidade ciclomática desnecessária.
+        3. Aderência às melhores práticas de Java 25 e Spring Boot 3.4.
+        4. Responda com comentários técnicos e construtivos diretamente nas linhas do código afetado.
     steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: AI Reviewer
-        uses: anc95/ChatGPT-CodeReview@main # Action que orquestra a revisão
+        id: review
+        continue-on-error: true # Review é consultivo; instabilidade da IA não bloqueia o PR
+        uses: anc95/ChatGPT-CodeReview@8bd66227f057f21e847a8c27c9b356c25271d292 # main
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          OPENAI_API_ENDPOINT: https://generativelanguage.googleapis.com/v1beta/openai/
-          LANGUAGE: Portuguese
           MODEL: gemini-2.5-flash
-          PROMPT: |
-            Aja como um Engenheiro de Segurança Sênior (DevSecOps). 
-            Analise o DIFF deste Pull Request buscando:
-            1. Vulnerabilidades OWASP Top 10 (especialmente SQL Injection e Insecure Deserialization).
-            2. Code Smells e complexidade ciclomática desnecessária.
-            3. Aderência às melhores práticas de Java 25 e Spring Boot 3.4.
-            4. Responda com comentários técnicos e construtivos diretamente nas linhas do código afetado.
+
+      - name: AI Reviewer (fallback)
+        if: steps.review.outcome == 'failure'
+        continue-on-error: true
+        uses: anc95/ChatGPT-CodeReview@8bd66227f057f21e847a8c27c9b356c25271d292 # main
+        env:
+          MODEL: gemini-2.5-flash-lite
